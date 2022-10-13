@@ -22,6 +22,28 @@ import torchvision.transforms as T
 
 from transformers import logging
 
+def jupyter_display_video(imgs, tmp_folder = "vid_tmp/"):
+
+    import os 
+    from IPython.display import HTML
+    from base64 import b64encode
+    from glob import glob
+    import shutil
+    os.makedirs(tmp_folder,exist_ok=True)
+    for i, img in enumerate(imgs):
+        img.save(f'{tmp_folder}{i:04}.jpeg')
+    cmd_mk_vid = f"ffmpeg -v 1 -y -f image2 -framerate 12 -i vid_tmp/%04d.jpeg -c:v libx264 -preset slow -qp 18 -pix_fmt yuv420p out.mp4"
+    os.system(cmd_mk_vid)
+
+    #shutil.rmtree(tmp_folder)
+    mp4 = open('out.mp4','rb').read()
+    data_url = "data:video/mp4;base64," + b64encode(mp4).decode()
+    return HTML("""
+    <video width=1024 controls>
+        <source src="%s" type="video/mp4">
+    </video>
+    """ % data_url)
+
 logging.set_verbosity_error()
 
 
@@ -142,12 +164,10 @@ class StableDifussionWrapper:
         latents=None,
         start_step=0,
         seed=None,
-        num_inference_steps=10,
-        guidance_scale=6,  # Scale for classifier-free guidance
-        ### Not sure if this needs to be there for lms sampler, 
-        # starting the diff process later than step 0
-        debugging_offset = 0 
-    ):
+        num_inference_steps=30,
+        guidance_scale=7.5,  # Scale for classifier-free guidance
+        return_latents_t0_preds = True,
+        ):
 
         if seed is None:
             seed = torch.randint(int(1e6), (1,))
@@ -156,32 +176,26 @@ class StableDifussionWrapper:
         # Prep Scheduler
         self.scheduler.set_timesteps(num_inference_steps)
 
+        # Get Text Embedding
+        text_embeddings = self.prep_text(prompt)
+
         if latents is None:
             latents = self.random_latents(seed=seed)
         
+        if start_step > 0:        
+            start_timestep = self.scheduler.timesteps[start_step].long()
+            start_timesteps = start_timestep.repeat(latents.shape[0]).long()
+            noise = torch.randn_like(latents)
+            latents = self.scheduler.add_noise(latents, noise, start_timesteps)
         
-        # if start_step > 0:
-        start_timestep = self.scheduler.timesteps[start_step].long()
-        # start_timesteps = start_timestep
-        noise = torch.randn_like(latents)
-        start_timesteps = start_timestep.repeat(latents.shape[0]).long()
-
-        latents = self.scheduler.add_noise(latents, noise, start_timesteps)
-        text_embeddings = self.prep_text(prompt)
-
         if self.scheduler_type == "lms":
-            #latents = latents * self.scheduler.sigmas[start_step-1 if start_step>0 else start_step]
             latents = latents * self.scheduler.sigmas[start_step]
-
-        # print("sigma start", self.scheduler.sigmas[start_step])
-        # print("latents", torch.norm(latents))
-        # print("text_embeddings", torch.norm(text_embeddings))
-
-
+    
+        latents_t0_preds = []
 
         with autocast("cuda"), inference_mode():
             for i, t in tqdm(enumerate(self.scheduler.timesteps),leave = False):
-                if i >= start_step + debugging_offset:
+                if i >= start_step:
                 
                     #print(i,t)
                     # expand the latents if we are doing classifier-free
@@ -203,13 +217,37 @@ class StableDifussionWrapper:
                     noise_pred = noise_pred_uncond + guidance_scale * (
                         noise_pred_text - noise_pred_uncond
                     )
-                    # compute the previous noisy sample x_t -> x_t-1
 
+                    # compute the previous noisy sample x_t -> x_t-1
+                    # Append latent history if return_x0_preds
                     if self.scheduler_type == "lms":
-                        latents = self.scheduler.step(noise_pred, i, latents)["prev_sample"]                        
+                        latents = self.scheduler.step(noise_pred, i, latents)["prev_sample"]
+                        if return_latents_t0_preds:
+                            latents_t0_pred = latents.detach().clone() - sigma * noise_pred
+                            latents_t0_preds.append(latents_t0_pred.detach().clone())
+                                                
                     if self.scheduler_type == "ddim":
                         latents = self.scheduler.step(noise_pred, t, latents)["prev_sample"]
-        return latents
+                        if return_latents_t0_preds:
+                            alpha_prod_t = self.alphas_cumprod[t]
+                            latents_t0_pred = (latents.detach().clone() - (1 - alpha_prod_t) ** (0.5) * noise_pred) / alpha_prod_t ** (0.5)
+                            latents_t0_preds.append(latents_t0_pred.detach().clone())
+        if return_latents_t0_preds:
+            return latents, torch.cat(latents_t0_preds)
+        else:
+            return latents
+
+ 
+        
+    def z_to_pil(self, z0, size = (512,512)):
+        n,_,_,_ = z0.shape
+        if n == 1:
+            x0 = self.decode(z0)
+            return tensor_to_pil(x0)[0].resize(size)
+        else:
+            return [tensor_to_pil(self.decode(z.unsqueeze(0)))[0].resize(size) for z in z0]
+
+
 
     def add_pe_words(self, prompt):
         return prompt + ", " + ", ".join(self.pe_words)
