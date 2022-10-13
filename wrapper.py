@@ -64,12 +64,14 @@ def image_grid(imgs, rows=1, cols=1):
 class StableDifussionWrapper:
     def __init__(self, 
                 img_size = (512,512),
-                scheduler_type = "lsm",
+                scheduler_type = "lms",
                 ):
         # Set device
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self.height, self.width = img_size
+
+        assert scheduler_type in ["lms","ddim"]
         self.scheduler_type = scheduler_type
 
         # Load the autoencoder model which will be used to decode the latents into image space.
@@ -107,7 +109,7 @@ class StableDifussionWrapper:
         if not scheduler_type is None:
             self.scheduler_type = scheduler_type
         
-        if self.scheduler_type == "ldm":
+        if self.scheduler_type == "lms":
             # The noise scheduler
             self.scheduler = LMSDiscreteScheduler(
                 beta_start=0.00085,
@@ -121,7 +123,7 @@ class StableDifussionWrapper:
                 beta_schedule='scaled_linear', num_train_timesteps=1000)
         else:
             raise NotImplementedError
-    def encode_image(self, imgs):
+    def encode(self, imgs):
         # Single image -> single latent in a batch (so size 1, 4, 64, 64)
         with torch.no_grad():
             latents = self.vae.encode(imgs)
@@ -142,6 +144,9 @@ class StableDifussionWrapper:
         seed=None,
         num_inference_steps=10,
         guidance_scale=6,  # Scale for classifier-free guidance
+        ### Not sure if this needs to be there for lms sampler, 
+        # starting the diff process later than step 0
+        debugging_offset = 0 
     ):
 
         if seed is None:
@@ -162,41 +167,48 @@ class StableDifussionWrapper:
         start_timesteps = start_timestep.repeat(latents.shape[0]).long()
 
         latents = self.scheduler.add_noise(latents, noise, start_timesteps)
+        text_embeddings = self.prep_text(prompt)
 
-        if self.scheduler_type == "ldm":
+        if self.scheduler_type == "lms":
             #latents = latents * self.scheduler.sigmas[start_step-1 if start_step>0 else start_step]
             latents = latents * self.scheduler.sigmas[start_step]
-            
+
+        # print("sigma start", self.scheduler.sigmas[start_step])
+        # print("latents", torch.norm(latents))
+        # print("text_embeddings", torch.norm(text_embeddings))
+
+
+
         with autocast("cuda"), inference_mode():
-            for i, t in tqdm(enumerate(self.scheduler.timesteps[start_step:]),leave = False):
-            
-                # expand the latents if we are doing classifier-free
-                # guidance to avoid doing two forward passes.
-                latent_model_input = torch.cat([latents] * 2)
+            for i, t in tqdm(enumerate(self.scheduler.timesteps),leave = False):
+                if i >= start_step + debugging_offset:
                 
-                if self.scheduler_type == "ldm":
-                    sigma = self.scheduler.sigmas[i]
-                    latent_model_input = latent_model_input / ((sigma**2 + 1) ** 0.5)
+                    #print(i,t)
+                    # expand the latents if we are doing classifier-free
+                    # guidance to avoid doing two forward passes.
+                    latent_model_input = torch.cat([latents] * 2)
+                    
+                    if self.scheduler_type == "lms":
+                        sigma = self.scheduler.sigmas[i]
+                        latent_model_input = latent_model_input / ((sigma**2 + 1) ** 0.5)
 
-                # predict the noise residual
-                with torch.no_grad():
-                    noise_pred = self.unet(
-                        latent_model_input,
-                        t,
-                        encoder_hidden_states=self.prep_text(prompt),
-                    )["sample"]
+                    # predict the noise residual
+                    with torch.no_grad():
+                        noise_pred = self.unet(
+                            latent_model_input,t,encoder_hidden_states=text_embeddings,
+                        )["sample"]
 
-                # perform classifier-free guidance
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + guidance_scale * (
-                    noise_pred_text - noise_pred_uncond
-                )
-                # compute the previous noisy sample x_t -> x_t-1
+                    # perform classifier-free guidance
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + guidance_scale * (
+                        noise_pred_text - noise_pred_uncond
+                    )
+                    # compute the previous noisy sample x_t -> x_t-1
 
-                if self.scheduler_type == "ldm":
-                    latents = self.scheduler.step(noise_pred, i, latents)["prev_sample"]                        
-                if self.scheduler_type == "ddim":
-                    latents = self.scheduler.step(noise_pred, t, latents)["prev_sample"]
+                    if self.scheduler_type == "lms":
+                        latents = self.scheduler.step(noise_pred, i, latents)["prev_sample"]                        
+                    if self.scheduler_type == "ddim":
+                        latents = self.scheduler.step(noise_pred, t, latents)["prev_sample"]
         return latents
 
     def add_pe_words(self, prompt):
