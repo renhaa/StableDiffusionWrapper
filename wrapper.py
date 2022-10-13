@@ -35,11 +35,11 @@ def jupyter_display_video(imgs, tmp_folder = "vid_tmp/"):
     cmd_mk_vid = f"ffmpeg -v 1 -y -f image2 -framerate 12 -i vid_tmp/%04d.jpeg -c:v libx264 -preset slow -qp 18 -pix_fmt yuv420p out.mp4"
     os.system(cmd_mk_vid)
 
-    #shutil.rmtree(tmp_folder)
+    shutil.rmtree(tmp_folder)
     mp4 = open('out.mp4','rb').read()
     data_url = "data:video/mp4;base64," + b64encode(mp4).decode()
     return HTML("""
-    <video width=1024 controls>
+    <video width=512 controls>
         <source src="%s" type="video/mp4">
     </video>
     """ % data_url)
@@ -68,6 +68,7 @@ def pil_to_tensor(pil_imgs):
 
 
 def image_grid(imgs, rows=1, cols=1):
+# TODO implement this
 # n = 10
 # num_rows = 4
 # num_col = n // num_rows
@@ -168,6 +169,12 @@ class StableDifussionWrapper:
         guidance_scale=7.5,  # Scale for classifier-free guidance
         return_latents_t0_preds = True,
         ):
+        
+        # TODO Implement this 
+        # import easydict
+        # history = easydict.EasyDict()
+        # history.z0_preds = []
+        # history.zts = []
 
         if seed is None:
             seed = torch.randint(int(1e6), (1,))
