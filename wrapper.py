@@ -22,7 +22,7 @@ import torchvision.transforms as T
 
 from transformers import logging
 
-def jupyter_display_video(imgs, tmp_folder = "vid_tmp/"):
+def jupyter_display_video(imgs, tmp_folder = "vid_tmp/", framerate = 4):
 
     import os 
     from IPython.display import HTML
@@ -32,7 +32,7 @@ def jupyter_display_video(imgs, tmp_folder = "vid_tmp/"):
     os.makedirs(tmp_folder,exist_ok=True)
     for i, img in enumerate(imgs):
         img.save(f'{tmp_folder}{i:04}.jpeg')
-    cmd_mk_vid = f"ffmpeg -v 1 -y -f image2 -framerate 12 -i vid_tmp/%04d.jpeg -c:v libx264 -preset slow -qp 18 -pix_fmt yuv420p out.mp4"
+    cmd_mk_vid = f"ffmpeg -v 1 -y -f image2 -framerate {framerate} -i vid_tmp/%04d.jpeg -c:v libx264 -preset slow -qp 18 -pix_fmt yuv420p out.mp4"
     os.system(cmd_mk_vid)
 
     shutil.rmtree(tmp_folder)
