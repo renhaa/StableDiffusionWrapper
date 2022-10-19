@@ -156,7 +156,7 @@ class StableDifussionWrapper:
         # scale and decode the image latents with vae
         latents = 1 / 0.18215 * latents
         with torch.no_grad():
-            image = self.vae.decode(latents)
+            image = self.vae.decode(latents).sample
         return image
 
     def diffusion_loop(
@@ -298,6 +298,15 @@ class StableDifussionWrapper:
         print(self.decode(self.random_latents()).shape)
         print(self.add_noise(self.random_latents()).shape)
 
+    
+    def lerp(self, z1,z2,t):
+        return z1*(1-t)**0.5 + z2*t**0.5
+        # return z1*(1-t) + z2*t
+
+    
+    def interpolation(self, z1, z2, numsteps = 5,t_min = 0, t_max = 1):
+        return torch.cat([self.lerp(z1,z2,t) for t in torch.linspace(t_min,t_max,numsteps)])
+    
     def generate_images(self, prompt,
                         n = 4,
                         seed=None, 
@@ -306,8 +315,10 @@ class StableDifussionWrapper:
                         ):
         torch.manual_seed(seed)
         all_imgs = []
+        all_z0_preds = []
+        
         for i in tqdm(range(n)):
-            latents = self.diffusion_loop(
+            latents, z0_preds = self.diffusion_loop(
                 prompt=prompt,
                 seed=None,  # change seed for different images or use `None` for random ones
                 num_inference_steps=num_inference_steps,  # More steps better quality but slower, 30-40 is usually a good zone
@@ -315,5 +326,6 @@ class StableDifussionWrapper:
             )
             imgs = self.decode(latents)
             all_imgs.append(imgs)
+            all_z0_preds.append(z0_preds)
         all_imgs = torch.cat(all_imgs)
-        return all_imgs
+        return all_imgs, all_z0_preds
