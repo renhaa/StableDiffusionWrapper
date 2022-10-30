@@ -1,4 +1,3 @@
-from sched import scheduler
 import torch
 
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -20,8 +19,10 @@ from base64 import b64encode
 import numpy as np 
 
 import torchvision.transforms as T
-
+import os 
 from transformers import logging
+logging.set_verbosity_error()
+
 
 def jupyter_display_video(imgs, tmp_folder = "vid_tmp/", framerate = 4):
 
@@ -44,8 +45,17 @@ def jupyter_display_video(imgs, tmp_folder = "vid_tmp/", framerate = 4):
         <source src="%s" type="video/mp4">
     </video>
     """ % data_url)
-
-logging.set_verbosity_error()
+def make_vid_from_pil_imgs(imgs, 
+                        tmp_folder = "vid_tmp/",
+                        framerate = 4,
+                        out_name = "out.mp4"):   
+    import shutil
+    os.makedirs(tmp_folder,exist_ok=True)
+    for i, img in enumerate(imgs):
+        img.save(f'{tmp_folder}{i:04}.jpeg')
+    cmd_mk_vid = f"ffmpeg -v 1 -y -f image2 -framerate {framerate} -i vid_tmp/%04d.jpeg -c:v libx264 -preset slow -qp 18 -pix_fmt yuv420p {out_name}"
+    os.system(cmd_mk_vid)
+    shutil.rmtree(tmp_folder)
 
 
 def tensor_to_pil(tensor_imgs):
@@ -166,6 +176,7 @@ class StableDifussionWrapper:
         latents=None,
         start_step=0,
         seed=None,
+        show_progbar = True,
         num_inference_steps=30,
         guidance_scale=7.5,  # Scale for classifier-free guidance
         return_latents_t0_preds = True,
@@ -200,9 +211,11 @@ class StableDifussionWrapper:
             latents = latents * self.scheduler.sigmas[start_step]
     
         latents_t0_preds = []
-
+        op = enumerate(self.scheduler.timesteps)
+        if show_progbar:
+            tqdm(op)
         with autocast("cuda"), inference_mode():
-            for i, t in tqdm(enumerate(self.scheduler.timesteps),leave = False):
+            for i, t in op:
                 if i >= start_step:
                 
                     #print(i,t)
