@@ -17,6 +17,7 @@ import numpy
 
 from IPython.display import HTML
 from base64 import b64encode
+import numpy as np 
 
 import torchvision.transforms as T
 
@@ -224,7 +225,7 @@ class StableDifussionWrapper:
                     noise_pred = noise_pred_uncond + guidance_scale * (
                         noise_pred_text - noise_pred_uncond
                     )
-
+    
                     # compute the previous noisy sample x_t -> x_t-1
                     # Append latent history if return_x0_preds
                     if self.scheduler_type == "lms":
@@ -303,8 +304,39 @@ class StableDifussionWrapper:
         return z1*(1-t)**0.5 + z2*t**0.5
         # return z1*(1-t) + z2*t
 
-    
-    def interpolation(self, z1, z2, numsteps = 5,t_min = 0, t_max = 1):
+
+    def slerp(t, v0, v1, DOT_THRESHOLD=0.9995):
+        """helper function to spherically interpolate two arrays v1 v2"""
+
+        if not isinstance(v0, np.ndarray):
+            inputs_are_torch = True
+            input_device = v0.device
+            v0 = v0.cpu().numpy()
+            v1 = v1.cpu().numpy()
+
+        dot = np.sum(v0 * v1 / (np.linalg.norm(v0) * np.linalg.norm(v1)))
+        if np.abs(dot) > DOT_THRESHOLD:
+            v2 = (1 - t) * v0 + t * v1
+        else:
+            theta_0 = np.arccos(dot)
+            sin_theta_0 = np.sin(theta_0)
+            theta_t = theta_0 * t
+            sin_theta_t = np.sin(theta_t)
+            s0 = np.sin(theta_0 - theta_t) / sin_theta_0
+            s1 = sin_theta_t / sin_theta_0
+            v2 = s0 * v0 + s1 * v1
+
+        if inputs_are_torch:
+            v2 = torch.from_numpy(v2).to(input_device)
+
+        return v2
+
+
+    def interpolation(self, z1, z2, 
+                        numsteps = 5,
+                        t_min = 0, 
+                        t_max = 1,
+                        method = "slerr"):
         return torch.cat([self.lerp(z1,z2,t) for t in torch.linspace(t_min,t_max,numsteps)])
     
     def generate_images(self, prompt,
